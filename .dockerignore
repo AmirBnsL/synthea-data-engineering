@@ -1,0 +1,9 @@
+bin/
+logs/
+warehouse/
+data/
+notebooks/
+.git/
+__pycache__/
+*.md
+.DS_Store

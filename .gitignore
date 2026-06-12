@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+DECISIONS.md
+FIX_REPORT.md
+PROJECT_PLAN.md
+/output
+/logs
+data/output
+bin/*
+.agents
+warehouse
