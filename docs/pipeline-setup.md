@@ -9,20 +9,14 @@
 │  -p 5 pats   │    │  raw-landing │    │  fhir_to_iceberg │
 │  ONC/PCOR    │    │   bucket     │    │  + GX validation │
 └──────────────┘    └──────────────┘    └────────┬─────────┘
-                                                 │
-                    ┌────────────────────────────┘
-                    ▼
-         ┌────────────────────┐
-         │  Iceberg REST Cat  │
-         │  raw.raw_landing   │
-         │  5 tables          │
-         └────────────────────┘
-
-         ┌────────────────────┐
-         │  Marquez UI        │
-         │  (localhost:3000)  │
-         │  Lineage viz       │
-         └────────────────────┘
+                                                  │
+                     ┌────────────────────────────┘
+                     ▼
+          ┌────────────────────┐
+          │  Iceberg REST Cat  │
+          │  raw.raw_landing   │
+          │  5 tables          │
+          └────────────────────┘
 ```
 
 ## Services
@@ -33,10 +27,7 @@
 | MinIO | `minio` | `minio/minio` | 9000, 9001 |
 | Spark + Iceberg | `spark-iceberg` | Custom (`spark/Dockerfile`) | 8888, 8080, 10000-10001 |
 | MinIO Client | `mc` | `minio/mc` | - |
-| Postgres (Airflow) | `postgres` | `postgres:latest` | 5432 |
-| Postgres (Marquez) | `postgres-marquez` | `postgres:14` | 5433 |
-| Marquez API | `marquez` | `marquezproject/marquez:0.50.0` | 5000 |
-| Marquez Web UI | `marquez-web` | `marquezproject/marquez-web:latest` | 3000 |
+| Postgres | `postgres` | `postgres:latest` | 5432 |
 | Airflow Init | `airflow-init` | Custom (`Dockerfile.airflow`) | - |
 | Airflow API Server | `airflow-webserver` | Custom (`Dockerfile.airflow`) | 8089 |
 | Airflow Scheduler | `airflow-scheduler` | Custom (`Dockerfile.airflow`) | - |
@@ -80,9 +71,17 @@ docker compose build airflow-webserver
 docker compose up -d
 ```
 
-### Run pipeline manually (for testing)
+### Run pipeline via Airflow tasks (recommended)
 ```bash
-# Step 1: Generate FHIR data (passes ONC/PCOR modules embedded in JAR)
+# Run each task sequentially (avoids Airflow 3 LocalExecutor fork issue)
+docker exec airflow-scheduler airflow tasks test synthea_to_minio generate_fhir 2026-06-12
+docker exec airflow-scheduler airflow tasks test synthea_to_minio upload_fhir_to_minio 2026-06-12
+docker exec airflow-scheduler airflow tasks test synthea_to_minio fhir_to_iceberg 2026-06-12
+```
+
+### Run pipeline manually
+```bash
+# Step 1: Generate FHIR data
 docker exec airflow-scheduler java -jar /opt/airflow/bin/synthea-with-dependencies.jar \
   -p 5 --exporter.baseDirectory=/opt/airflow/data/output
 
@@ -97,34 +96,15 @@ for f in os.listdir('/opt/airflow/data/output/fhir'):
 "
 
 # Step 3: Ingest to Iceberg + GX Validate
-docker exec spark-iceberg spark-submit --driver-memory 4g \
+docker exec spark-iceberg spark-submit --driver-memory 6g \
+  --conf spark.driver.extraJavaOptions="-XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=35" \
   /home/iceberg/spark/jobs/fhir_to_iceberg.py
 ```
 
-### Trigger DAG run (direct database insert)
+### Trigger DAG via CLI
 ```bash
-docker exec postgres psql -U airflow -d airflow -c "
-INSERT INTO dag_run (dag_id, run_id, logical_date, data_interval_start,
-  data_interval_end, run_after, queued_at, state, run_type)
-SELECT 'synthea_to_minio',
-  'manual_' || to_char(now(), 'YYYYMMDD_HH24MISS'),
-  now(), now(), now(), now(), now(), 'queued', 'manual'
-WHERE NOT EXISTS (
-  SELECT 1 FROM dag_run WHERE dag_id = 'synthea_to_minio'
-  AND state IN ('queued', 'running')
-);"
+docker exec airflow-scheduler airflow dags trigger synthea_to_minio
 ```
-
-### Query Lineage Graph (Marquez)
-
-```bash
-# Via GraphQL — shows lineage graph with jobs, datasets, and edges
-curl -s "http://localhost:5000/api/v1-beta/graphql" -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ lineageFromJob(namespace: \"synthea\", name: \"fhir_to_iceberg\", depth: 1) { graph { __typename ... on JobLineageEntry { name namespace type inEdges { name namespace type } outEdges { name namespace type } } ... on DatasetLineageEntry { name namespace type inEdges { name namespace type } outEdges { name namespace type } } } } }"}'
-```
-
-Or open Marquez Web UI at `http://localhost:3000`.
 
 ### Verify Iceberg data
 ```bash
@@ -151,17 +131,37 @@ for t in ['patients','encounters','conditions','observations','procedures']:
 - Endpoint: `http://minio:9000` with path-style access
 - Namespace: `raw.raw_landing`
 
-### Airflow OpenLineage
-- Provider: `apache-airflow-providers-openlineage==2.18.0`
-- Env vars: `OPENLINEAGE_URL=http://marquez:5000`, `OPENLINEAGE_NAMESPACE=synthea`
-- Marquez DB: Isolated `postgres:14` on port 5433
+### Docker-outside-of-Docker (DooD) Pattern
 
-### Marquez
-- API server: `marquezproject/marquez:0.50.0` (port 5000, admin port 5001)
-- Web UI: `marquezproject/marquez-web:latest` (port 3000)
-- Web required env vars: `MARQUEZ_HOST=marquez`, `MARQUEZ_PORT=5000`, `WEB_PORT=3000`
-- Lineage API: `POST /api/v1/lineage` (OpenLineage RunEvent submission)
-- Lineage query: GraphQL at `/api/v1-beta/graphql` with `lineageFromJob(namespace, name, depth)`
+The `fhir_to_iceberg` task uses a `BashOperator` that calls `docker exec spark-iceberg spark-submit ...` from inside the `airflow-scheduler` container. Here's how it works:
+
+**Mechanism**: `BashOperator` runs bash commands as a subprocess inside the Airflow worker that picked up the task. In our LocalExecutor setup, that worker lives in the `airflow-scheduler` container. The `docker exec` command reaches the Docker daemon on the host through the mounted socket (`/var/run/docker.sock`), which then executes the command inside the `spark-iceberg` container. stdout/stderr flows back through the daemon → socket → docker CLI → Airflow task log.
+
+**Why**: Spark + Iceberg + GX have heavy Java/Python dependencies built into a separate image (`spark/Dockerfile`). Running the PySpark job from a single monolithic Airflow image would bloat it unnecessarily. The DooD pattern keeps images single-responsibility: Airflow orchestrates, Spark computes — no Kubernetes or Celery needed just to run one cross-container job.
+
+**Socket mount** in `docker-compose.yml`:
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+This gives the `airflow-scheduler` container the same Docker API access as the host. It's the standard pattern used by CI runners (GitLab, Jenkins) and Airflow's own `DockerOperator`.
+
+**Security note**: Mounting the Docker socket is equivalent to granting root access on the host. Acceptable for local dev; for production, prefer Airflow's `DockerOperator` (which handles the exec natively without requiring a socket mount) or `KubernetesPodOperator`.
+
+### Spark Memory
+- Driver/Executor: 6g each with G1GC garbage collector
+- Config: `spark.driver.extraJavaOptions=-XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=35`
+
+### Airflow JWT Authentication
+- All services (webserver, scheduler, dag-processor) must share the same `AIRFLOW__API_AUTH__JWT_SECRET`
+- Without this, the LocalExecutor worker processes cannot authenticate with the API server, causing `Signature verification failed` errors
+- Also requires `AIRFLOW__CORE__SECRET_KEY` to be consistent across all services
+
+### Airflow Login
+- `admin:admin` works via a pre-populated password file mounted at `/opt/airflow/simple_auth_manager_passwords.json.generated`
+- Airflow 3's Simple Auth Manager ignores the `password` field in the env var — passwords are always auto-generated
+- File format: `{"admin": "admin"}` (JSON object mapping username → password)
 
 ### FHIR Data Format
 - All `subject.reference` values use `urn:uuid:<uuid>` (not `Patient/<id>`)
@@ -171,12 +171,9 @@ for t in ['patients','encounters','conditions','observations','procedures']:
 
 | Issue | Impact | Workaround |
 |-------|--------|------------|
-| Airflow 3 CLI missing `psycopg2` | Cannot run `airflow dags trigger` from CLI | Use direct DB insert (see commands above) |
-| Simple Auth Manager generates random password | Admin password not set by env var | Check startup logs for generated password |
-| LocalExecutor task auth failure with OpenLineage | Manual DAG runs via API fail | Run pipeline manually or wait for scheduled runs |
-| Spark OOM on partitioned writes | Encounters table with 6+ patients | Use `--driver-memory 4g` |
-| Marquez 0.50.0 has no REST lineage GET | Lineage graph only available via GraphQL | Use `/api/v1-beta/graphql` with `lineageFromJob` query |
-| Marquez GraphQL edge direction reversed | `inEdges` shows outputs, `outEdges` shows inputs | Read edges semantically from each node's perspective |
+| mc container resets warehouse on restart | Iceberg tables lose metadata | Re-run pipeline after any `docker compose restart` |
+| Spark OOM on encounters ingestion | 6+ patients with default settings | Use `--driver-memory 6g` + G1GC (already configured in DAG) |
+| Env var changes require `docker compose up -d` | `docker compose restart` doesn't apply new env vars | Use `docker compose up -d` to recreate containers |
 
 ## ONC/PCOR Modules
 

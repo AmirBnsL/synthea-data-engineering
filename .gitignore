@@ -17,3 +17,4 @@ data/output
 bin/*
 .agents
 warehouse
+config/simple_auth_manager_passwords.json.generated

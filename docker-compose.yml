@@ -1,6 +1,7 @@
 services:
   spark-iceberg:
     build: spark/
+    image: synthea-spark:latest
     container_name: spark-iceberg
     networks:
       - iceberg_net
@@ -10,13 +11,14 @@ services:
     volumes:
       - ./warehouse:/home/iceberg/warehouse
       - ./notebooks:/home/iceberg/notebooks/notebooks
-      - ./spark/jobs:/home/iceberg/spark/jobs
+      - ./spark:/home/iceberg/spark
       - ./data:/home/iceberg/data
       - ./spark/gx:/home/iceberg/gx
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1
+      - SPARK_WORKER_MEMORY=10g
     ports:
       - 8888:8888
       - 8080:8080
@@ -67,7 +69,6 @@ services:
     entrypoint: |
       /bin/sh -c "
       until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
-      /usr/bin/mc rm -r --force minio/warehouse;
       /usr/bin/mc mb minio/warehouse;
       /usr/bin/mc anonymous set public minio/warehouse
       /usr/bin/mc mb minio/raw-landing;
@@ -140,6 +141,8 @@ services:
       - AIRFLOW__CORE__FERNET_KEY=fbZ1KVAs2A9vS8N9E4P7H2yT98v1bL2k_D3O8jE-7w4=
       - AIRFLOW_CONN_MINIO_CONN_ID=aws://admin:password@/?endpoint_url=http%3A%2F%2Fminio%3A9000
       - AIRFLOW__CORE__SECRET_KEY=airflow-secret-key-change-me
+      - AIRFLOW__API_AUTH__JWT_SECRET=airflow-jwt-secret-change-me
+      - PROJECT_ROOT=/home/amirbnsl/Projects/synthea
 
     logging:
       options:
@@ -150,8 +153,10 @@ services:
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - ./data:/opt/airflow/data
+      - ./tests:/opt/airflow/tests
       - /var/run/docker.sock:/var/run/docker.sock
       - ./bin/:/opt/airflow/bin
+      - ./config/simple_auth_manager_passwords.json.generated:/opt/airflow/simple_auth_manager_passwords.json.generated
     user: "0:0"
     command: api-server
 
@@ -176,10 +181,15 @@ services:
       - AIRFLOW__SIMPLE_AUTH_MANAGER__USERS=[{"username":"admin","password":"admin"}]
       - AIRFLOW__CORE__FERNET_KEY=fbZ1KVAs2A9vS8N9E4P7H2yT98v1bL2k_D3O8jE-7w4=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__SECRET_KEY=airflow-secret-key-change-me
+      - AIRFLOW__API_AUTH__JWT_SECRET=airflow-jwt-secret-change-me
+      - PROJECT_ROOT=/home/amirbnsl/Projects/synthea
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
+      - ./tests:/opt/airflow/tests
+      - ./config/simple_auth_manager_passwords.json.generated:/opt/airflow/simple_auth_manager_passwords.json.generated
     user: "0:0"
     command: dag-processor
 
@@ -205,15 +215,20 @@ services:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW_CONN_MINIO_CONN_ID=aws://admin:password@/?endpoint_url=http%3A%2F%2Fminio%3A9000
       - AIRFLOW__CORE__SECRET_KEY=airflow-secret-key-change-me
+      - AIRFLOW__API_AUTH__JWT_SECRET=airflow-jwt-secret-change-me
+      - PROJECT_ROOT=/home/amirbnsl/Projects/synthea
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - ./data:/opt/airflow/data
+      - ./tests:/opt/airflow/tests
       - /var/run/docker.sock:/var/run/docker.sock
       - ./bin/:/opt/airflow/bin
+      - ./config/simple_auth_manager_passwords.json.generated:/opt/airflow/simple_auth_manager_passwords.json.generated
     user: "0:0"
     command: scheduler
+
 volumes:
   postgres_data:
 
