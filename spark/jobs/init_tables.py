@@ -33,7 +33,7 @@ def init_tables(spark):
             period_start  TIMESTAMP,
             period_end    TIMESTAMP,
             file_source   STRING
-        ) USING iceberg PARTITIONED BY (months(period_start))
+        ) USING iceberg
     """)
 
     spark.sql(f"""
@@ -57,7 +57,7 @@ def init_tables(spark):
             value_unit       STRING,
             effective_date   TIMESTAMP,
             file_source      STRING
-        ) USING iceberg PARTITIONED BY (months(effective_date))
+        ) USING iceberg
     """)
 
     spark.sql(f"""
@@ -67,7 +67,7 @@ def init_tables(spark):
             procedure_text STRING,
             procedure_date TIMESTAMP,
             file_source    STRING
-        ) USING iceberg PARTITIONED BY (months(procedure_date))
+        ) USING iceberg
     """)
 
     print("Tables initialized successfully.")

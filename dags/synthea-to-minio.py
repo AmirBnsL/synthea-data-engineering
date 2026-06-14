@@ -75,9 +75,6 @@ with DAG(
         command=[
             "-c",
             "spark-submit "
-            "--driver-memory 10g "
-            "--conf spark.executor.memory=10g "
-            "--conf 'spark.driver.extraJavaOptions=-XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=35' "
             "/home/iceberg/spark/jobs/fhir_to_iceberg.py "
             '--date "$(date +%Y-%m-%d)"',
         ],

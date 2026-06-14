@@ -17,5 +17,6 @@ data/output
 bin/*
 .agents
 warehouse
+minio_data
 config/simple_auth_manager_passwords.json.generated
 papers

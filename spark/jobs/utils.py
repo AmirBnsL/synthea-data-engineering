@@ -18,29 +18,8 @@ TABLE_NAMES = {
 }
 
 
-def init_spark(app_name="FHIR-to-Iceberg", driver_memory="10g", executor_memory="10g"):
-    return (
-        SparkSession.builder.appName(app_name)
-        .config("spark.sql.catalog.raw", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.raw.type", "rest")
-        .config("spark.sql.catalog.raw.uri", "http://iceberg-rest:8181")
-        .config("spark.sql.catalog.raw.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
-        .config("spark.sql.catalog.raw.s3.endpoint", "http://minio:9000")
-        .config("spark.sql.catalog.raw.s3.path-style-access", "true")
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
-        .config("spark.hadoop.fs.s3a.access.key", "admin")
-        .config("spark.hadoop.fs.s3a.secret.key", "password")
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.driver.memory", driver_memory)
-        .config("spark.executor.memory", executor_memory)
-        .config("spark.sql.shuffle.partitions", "4")
-        .config("spark.sql.files.maxPartitionBytes", "128m")
-        .config("spark.driver.extraJavaOptions", "-XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=35")
-        .config("spark.sql.adaptive.enabled", "true")
-        .getOrCreate()
-    )
+def init_spark(app_name="FHIR-to-Iceberg"):
+    return SparkSession.builder.appName(app_name).getOrCreate()
 
 
 def build_suite(table_name):
